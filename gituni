@@ -1,0 +1,115 @@
+#!/bin/bash
+
+# スクリプトがエラーで停止するように設定
+set -e
+
+# --- オプションと引数の初期値を設定 ---
+show_line_numbers=false
+# デフォルトの検索パターン (ERE): .kt または .java で終わるファイル
+search_pattern='\.(kt|java)$'
+print_help=false
+
+# --- getopts を使ってコマンドラインオプションを解析 ---
+# "np:" は -n (引数なし) と -p (引数あり) を受け付けることを示す
+while getopts "np:h" opt; do
+  case $opt in
+    n)
+      show_line_numbers=true
+      ;;
+    p)
+      search_pattern="$OPTARG" # -p に続く引数を検索パターンとして格納
+      ;;
+    h)
+      print_help=true
+      ;;
+    \?) # 不正なオプションが見つかった場合
+      echo "不正なオプション: -$OPTARG" >&2
+      print_help=true
+      ;;
+    :) # 引数が必要なオプションに引数がなかった場合
+      echo "オプション -$OPTARG には引数が必要です。" >&2
+      print_help=true
+      ;;
+  esac
+done
+
+# --- ヘルプ表示 ---
+if [ "$print_help" = true ]; then
+  echo "使い方: $0 [-n] [-p PATTERN] [-h]"
+  echo "  Gitリポジトリ内のファイルをリストし、指定されたファイルの内容を表示します。"
+  echo
+  echo "  オプション:"
+  echo "    -n         ファイル内容に行番号を付けて表示します。"
+  echo "    -p PATTERN ファイルをフィルタリングするための拡張正規表現(ERE)パターンを指定します。"
+  echo "               デフォルト: '\\.(kt|java)$' (.kt または .java で終わるファイル)"
+  echo "    -h         このヘルプメッセージを表示します。"
+  echo
+  echo "  例:"
+  echo "    $0                     # .kt/.java ファイルのリストと内容(行番号なし)を表示"
+  echo "    $0 -n                  # .kt/.java ファイルのリストと内容(行番号あり)を表示"
+  echo "    $0 -p '\.md$'          # .md ファイルのリストと内容(行番号なし)を表示"
+  echo "    $0 -n -p 'README.*'    # 'README.'で始まるファイルの内容(行番号あり)を表示"
+  exit 1
+fi
+
+
+# --- getopts で処理したオプションを除去 ---
+shift $((OPTIND - 1))
+
+# --- Gitリポジトリチェック ---
+if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+  echo "エラー: Gitリポジトリ内で実行してください。" >&2
+  exit 1
+fi
+
+# --- 定数定義 ---
+separator="--------------------------------------------------------------------------------"
+
+# --- Part 1: ディレクトリ構造（ファイルパス一覧）の出力 ---
+echo "# Directory Structure (Pattern: $search_pattern)"
+echo ""
+# 指定された検索パターンで grep を使ってフィルタリング
+git ls-files | grep -E "$search_pattern" | sort || echo "指定されたパターンに一致するファイルは見つかりませんでした。"
+echo ""
+echo "$separator" # 区切り
+echo ""
+
+# --- Part 2: ファイル内容の出力 ---
+if [ "$show_line_numbers" = true ]; then
+  echo "# File Contents (Pattern: $search_pattern, with Line Numbers)"
+else
+  echo "# File Contents (Pattern: $search_pattern)"
+fi
+echo ""
+
+processed_files=0
+# 指定された検索パターンで grep を使ってフィルタリングし、ソートしてループ処理
+git ls-files | grep -E "$search_pattern" | sort | while IFS= read -r file; do
+  # ファイルが存在することを確認
+  if [ -f "$file" ]; then
+    processed_files=$((processed_files + 1))
+
+    echo "$separator"
+    echo "$file:" # ファイルパスとコロン
+    echo "$separator"
+
+    # -n フラグの有無に応じて出力方法を切り替え
+    if [ "$show_line_numbers" = true ]; then
+      # 行番号付きで出力 (awk)
+      awk '{ printf "%4d | %s\n", NR, $0 }' "$file" || echo "Error reading file: $file" >&2
+    else
+      # 行番号なしで出力 (cat)
+      cat "$file" || echo "Error reading file: $file" >&2
+    fi
+    echo "" # ファイル内容の後ろに改行を追加
+  fi
+done
+
+# もし指定パターンに一致するファイルが1つも処理されなかった場合にメッセージを表示
+if [ "$processed_files" -eq 0 ] && ! git ls-files | grep -qE "$search_pattern"; then
+    echo "指定されたパターンに一致するファイルは見つかりませんでした。"
+fi
+
+echo "# End of List"
+
+exit 0
